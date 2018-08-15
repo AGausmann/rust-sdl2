@@ -18,12 +18,19 @@ extern crate cfg_if;
 
 use std::path::{Path, PathBuf};
 use std::{io, fs, env};
+use std::process::Command;
 
 // corresponds to the headers that we have in sdl2-sys/SDL2-{version}
 const SDL2_HEADERS_BUNDLED_VERSION: &str = "2.0.8";
 
 // means the lastest stable version that can be downloaded from SDL2's source
 const LASTEST_SDL2_VERSION: &str = "2.0.8";
+
+// The latest stable (tagged) port for the emscripten target
+const LATEST_EMSCRIPTEN_SDL2_TAG: &str = "version_13";
+
+// Version of emscripten to use.
+const LATEST_EMSCRIPTEN_VERSION: &str = "1.38.11";
 
 #[cfg(feature = "bindgen")]
 macro_rules! add_msvc_includes_to_bindings {
@@ -88,14 +95,26 @@ fn get_pkg_config() {
 
 // returns the location of the downloaded source
 #[cfg(feature = "bundled")]
-fn download_sdl2() -> PathBuf {
-    let out_dir = env::var("OUT_DIR").unwrap();
-    
-    let sdl2_archive_name = format!("SDL2-{}.tar.gz", LASTEST_SDL2_VERSION);
-    let sdl2_archive_url = format!("http://libsdl.org/release/{}", sdl2_archive_name);
+fn download_sdl2(target_os: &str) -> PathBuf {
+    let out_dir = env::var("OUT_DIR").unwrap(); 
+
+    let version_ref = if target_os == "emscripten" {
+        LATEST_EMSCRIPTEN_SDL2_TAG
+    } else {
+        LASTEST_SDL2_VERSION
+    };
+    let sdl2_archive_name = format!("SDL2-{}.tar.gz", version_ref);
+    let sdl2_archive_url = if target_os == "emscripten" {
+        format!(
+            "https://github.com/emscripten-ports/SDL2/archive/{}.tar.gz",
+            LATEST_EMSCRIPTEN_SDL2_TAG,
+        )
+    } else {
+        format!("http://libsdl.org/release/{}", sdl2_archive_name)
+    };
     
     let sdl2_archive_path = Path::new(&out_dir).join(sdl2_archive_name);
-    let sdl2_build_path = Path::new(&out_dir).join(format!("SDL2-{}", LASTEST_SDL2_VERSION));
+    let sdl2_build_path = Path::new(&out_dir).join(format!("SDL2-{}", version_ref));
 
     // avoid re-downloading the archive if it already exists    
     if !sdl2_archive_path.exists() {
@@ -112,6 +131,34 @@ fn download_sdl2() -> PathBuf {
     sdl2_build_path
 }
 
+#[cfg(feature = "bundled")]
+fn download_emscripten() -> PathBuf {
+    // Use the already-activated toolchain if it exists:
+    if let Ok(path) = env::var("EMSCRIPTEN") {
+        return PathBuf::from(path);
+    }
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let archive_path = out_dir.join(format!("emscripten-{}.tar.gz", LATEST_EMSCRIPTEN_VERSION));
+        
+    if !archive_path.exists() {
+        let archive_url = format!(
+            "https://github.com/kripken/emscripten/archive/{}.tar.gz",
+            LATEST_EMSCRIPTEN_VERSION,
+        );
+        let archive_file = fs::File::create(&archive_path).unwrap();
+        download_to(&archive_url, &archive_file);
+    }
+
+    let reader = flate2::read::GzDecoder::new(
+        fs::File::open(&archive_path).unwrap()
+    ).unwrap();
+    let mut archive = tar::Archive::new(reader);
+    archive.unpack(&out_dir).unwrap();
+
+    out_dir.join(format!("emscripten-{}", LATEST_EMSCRIPTEN_VERSION))
+}
+
 // compile a shared or static lib depending on the feature 
 #[cfg(feature = "bundled")]
 fn compile_sdl2(sdl2_build_path: &Path, target_os: &str) -> PathBuf {
@@ -120,6 +167,11 @@ fn compile_sdl2(sdl2_build_path: &Path, target_os: &str) -> PathBuf {
 
     if target_os == "windows-gnu" {
         cfg.define("VIDEO_OPENGLES", "OFF");
+    } else if target_os == "emscripten" {
+        let emscripten_toolchain_file = download_emscripten().join("cmake")
+            .join("Modules").join("Platform").join("Emscripten.cmake");
+
+        cfg.define("CMAKE_TOOLCHAIN_FILE", emscripten_toolchain_file);
     }
 
     if cfg!(feature = "static-link") {
@@ -131,6 +183,15 @@ fn compile_sdl2(sdl2_build_path: &Path, target_os: &str) -> PathBuf {
     }
 
     cfg.build()
+}
+
+#[cfg(feature = "bundled")]
+fn check_command(command: &str, args: &[&str]) {
+    let mut command = Command::new(command);
+    command.args(args);
+    if ! command.status().unwrap().success() {
+        panic!("Nonzero exit code from command {:?}", command);
+    }
 }
 
 #[cfg(not(feature = "bundled"))]
@@ -287,7 +348,7 @@ fn main() {
     let target_os = get_os_from_triple(target.as_str()).unwrap();
 
     #[cfg(feature = "bundled")] {
-        let sdl2_source_path = download_sdl2();
+        let sdl2_source_path = download_sdl2(target_os);
         let sdl2_compiled_path = compile_sdl2(sdl2_source_path.as_path(), target_os);
 
         let sdl2_downloaded_include_path = sdl2_source_path.join("include");
