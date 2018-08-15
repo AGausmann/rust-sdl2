@@ -45,12 +45,7 @@ fn download_to<T: io::Write>(url: &str, mut dest: T) {
     use io::BufRead;
 
     let resp = reqwest::get(url).expect(&format!("Failed to GET resource: {:?}", url));
-    let size = resp.headers()
-        .get::<reqwest::header::ContentLength>()
-        .map(|ct_len| **ct_len)
-        .unwrap_or(0);
     if !resp.status().is_success() { panic!("Download request failed with status: {:?}", resp.status()) }
-    if size == 0 { panic!("Size of content was returned was 0") }
 
     let mut src = io::BufReader::new(resp);
     loop {
