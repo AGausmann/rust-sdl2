@@ -126,7 +126,7 @@ fn download_sdl2(target_os: &str) -> PathBuf {
 
     // avoid re-downloading the archive if it already exists    
     if !sdl2_archive_path.exists() {
-        download_to(&sdl2_archive_url, sdl2_archive_path.to_str().unwrap());
+        download_to(&sdl2_archive_url, fs::File::create(&sdl2_archive_path).unwrap());
     }
 
     let reader = flate2::read::GzDecoder::new(
@@ -239,7 +239,7 @@ fn patch_sdl2(sdl2_source_path: &Path) {
             // ever have more than one hunk.
             assert!(added_file.len() == 1);
             let file_path = sdl2_source_path.join(added_file.path());
-            let mut dst_file = fs::File::create(&file_path)
+            let dst_file = fs::File::create(&file_path)
                 .expect(&format!(
                     "Failed to create file {}",
                     file_path.to_string_lossy()));

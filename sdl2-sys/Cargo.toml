@@ -44,6 +44,7 @@ version = "^0.3"
 optional = true
 
 [build-dependencies]
+reqwest = "0.9.15"
 cfg-if = "^0.1"
 
 [features]
