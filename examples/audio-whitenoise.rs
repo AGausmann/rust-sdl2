@@ -16,14 +16,14 @@ impl AudioCallback for MyCallback {
 
         // Generate white noise
         for x in out.iter_mut() {
-            *x = (rng.next_f32()*2.0 - 1.0) * self.volume;
+            *x = (rng.gen_range(0.0, 2.0) - 1.0) * self.volume;
         }
     }
 }
 
-fn main() {
-    let sdl_context = sdl2::init().unwrap();
-    let audio_subsystem = sdl_context.audio().unwrap();
+fn main() -> Result<(), String> {
+    let sdl_context = sdl2::init()?;
+    let audio_subsystem = sdl_context.audio()?;
 
     let desired_spec = AudioSpecDesired {
         freq: Some(44_100),
@@ -37,7 +37,7 @@ fn main() {
         println!("{:?}", spec);
 
         MyCallback { volume: 0.5 }
-    }).unwrap();
+    })?;
 
     // Start playback
     device.resume();
@@ -56,4 +56,6 @@ fn main() {
     std::thread::sleep(Duration::from_millis(1_000));
 
     // Device is automatically closed when dropped
+
+    Ok(())
 }

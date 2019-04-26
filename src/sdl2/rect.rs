@@ -1,10 +1,10 @@
 //! Rectangles and points.
 #![allow(const_err)]
 
-use sys;
+use crate::sys;
 use std::mem;
 use std::ptr;
-use std::ops::{Deref, DerefMut, Add, BitAnd, BitOr, Div, Mul, Neg, Sub};
+use std::ops::{Deref, DerefMut, Add, AddAssign, BitAnd, BitOr, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use std::convert::{AsRef, AsMut};
 use std::hash::{Hash, Hasher};
 
@@ -65,9 +65,16 @@ fn clamped_mul(a: i32, b: i32) -> i32 {
 /// recommended to use `Option<Rect>`, with `None` representing an empty
 /// rectangle (see, for example, the output of the
 /// [`intersection`](#method.intersection) method).
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Rect {
     raw: sys::SDL_Rect,
+}
+
+impl ::std::fmt::Debug for Rect {
+    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+        return write!(fmt, "Rect {{ x: {}, y: {}, w: {}, h: {} }}",
+            self.raw.x, self.raw.y, self.raw.w, self.raw.h);
+    }
 }
 
 impl PartialEq for Rect {
@@ -653,9 +660,15 @@ impl BitOr<Rect> for Rect {
 }
 
 /// Immutable point type, consisting of x and y.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub struct Point {
     raw: sys::SDL_Point
+}
+
+impl ::std::fmt::Debug for Point {
+    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
+        return write!(fmt, "Point {{ x: {}, y: {} }}", self.raw.x, self.raw.y);
+    }
 }
 
 impl PartialEq for Point {
@@ -815,6 +828,13 @@ impl Add for Point {
     }
 }
 
+impl AddAssign for Point {
+    fn add_assign(&mut self, rhs: Point) {
+        self.raw.x = clamp_position(self.x() + rhs.x());
+        self.raw.y = clamp_position(self.y() + rhs.y());
+    }
+}
+
 impl Neg for Point {
     type Output = Point;
 
@@ -831,6 +851,13 @@ impl Sub for Point {
     }
 }
 
+impl SubAssign for Point {
+    fn sub_assign(&mut self, rhs: Point) {
+        self.raw.x = clamp_position(self.x() - rhs.x());
+        self.raw.y = clamp_position(self.y() - rhs.y());
+    }
+}
+
 impl Mul<i32> for Point {
     type Output = Point;
 
@@ -839,11 +866,25 @@ impl Mul<i32> for Point {
     }
 }
 
+impl MulAssign<i32> for Point {
+    fn mul_assign(&mut self, rhs: i32) {
+        self.raw.x = clamped_mul(self.x(), rhs);
+        self.raw.y = clamped_mul(self.y(), rhs);
+    }
+}
+
 impl Div<i32> for Point {
     type Output = Point;
 
     fn div(self, rhs: i32) -> Point {
         Point::new(self.x() / rhs, self.y() / rhs)
+    }
+}
+
+impl DivAssign<i32> for Point {
+    fn div_assign(&mut self, rhs: i32) {
+        self.raw.x /= rhs;
+        self.raw.y /= rhs;
     }
 }
 
@@ -1021,9 +1062,29 @@ mod test {
     }
 
     #[test]
+    fn point_add_assign() {
+        let mut point = Point::new(-11, 5);
+        point += Point::new(6, 2);
+        assert_eq!(
+            point,
+            Point::new(-11, 5) + Point::new(6, 2)
+        );
+    }
+
+    #[test]
     fn point_sub() {
         assert_eq!(
             Point::new(-17, 3),
+            Point::new(-11, 5) - Point::new(6, 2)
+        );
+    }
+
+    #[test]
+    fn point_sub_assign() {
+        let mut point = Point::new(-11, 5);
+        point -= Point::new(6, 2);
+        assert_eq!(
+            point,
             Point::new(-11, 5) - Point::new(6, 2)
         );
     }
@@ -1037,9 +1098,29 @@ mod test {
     }
 
     #[test]
+    fn point_mul_assign() {
+        let mut point = Point::new(-11, 5);
+        point *= 3;
+        assert_eq!(
+            point,
+            Point::new(-11, 5) * 3
+        );
+    }
+
+    #[test]
     fn point_mul_clamp() {
         assert_eq!(
             Point::new(0x7fffffff, -0x7fffffff),
+            Point::new(-1000000, 5000000) * -3000000
+        );
+    }
+
+    #[test]
+    fn point_mul_assign_clamp() {
+        let mut point = Point::new(-1000000, 5000000);
+        point *= -3000000;
+        assert_eq!(
+            point,
             Point::new(-1000000, 5000000) * -3000000
         );
     }
@@ -1051,4 +1132,15 @@ mod test {
             Point::new(-11, 5) / 3
         );
     }
+
+    #[test]
+    fn point_div_assign () {
+        let mut point = Point::new(-11, 5);
+        point /= 3;
+        assert_eq!(
+            point,
+            Point::new(-11, 5) / 3
+        );
+    }
+
 }

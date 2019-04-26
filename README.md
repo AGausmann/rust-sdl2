@@ -2,7 +2,7 @@
 
 Bindings for SDL2 in Rust
 
-### [Changelog for 0.31](changelog.md#v031)
+### [Changelog for 0.32](changelog.md#v032)
 
 # Overview
 
@@ -32,7 +32,7 @@ We currently target the latest stable release of Rust.
 
 ## *SDL2.0 development libraries*
 
-SDL2 >= 2.0.8 is recommended to use these bindings, but note that SDL2 >= 2.0.4 is also supported. Below 2.0.4, you may experience link-time errors as some functions are used here but are not defined in SDL2. If you experience this issue because you are on a LTS machine (for instance, Ubuntu 12.04 or Ubuntu 14.04), we definitely recommend you to use the feature "bundled" which will compile the lastest stable version of SDL2 for your project.
+SDL2 >= 2.0.8 is recommended to use these bindings, but note that SDL2 >= 2.0.5 is also supported. Below 2.0.5, you may experience link-time errors as some functions are used here but are not defined in SDL2. If you experience this issue because you are on a LTS machine (for instance, Ubuntu 12.04 or Ubuntu 14.04), we definitely recommend you to use the feature "bundled" which will compile the lastest stable version of SDL2 for your project.
 
 ### "Bundled" Feature
 
@@ -189,7 +189,7 @@ fn main() {
 
 `/*.dll`
 
-8. When you're shipping your game make sure to copy the corresponding SDL2.dll to the same directory that your compiled exe is in, otherwise the game won't launch.
+8. When you're publish your game make sure to copy the corresponding SDL2.dll to the same directory that your compiled exe is in, otherwise the game won't launch.
 
 And now your project should build and run on any Windows computer!
 
@@ -210,8 +210,8 @@ http://www.libsdl.org/ (SDL2-devel-2.0.x-mingw.tar.gz).
     or to your library folder of choice, and ensure you have a system environment variable of
     > LIBRARY_PATH = C:\your\rust\library\folder
 
-	For Rustup users, this folder will be in
-	> C:\Users\\{Your Username}\\.multirust\toolchains\\{current toolchain}\lib\rustlib\\{current toolchain}\lib
+    For Rustup users, this folder will be in
+    > C:\Users\\{Your Username}\\.rustup\toolchains\\{current toolchain}\lib\rustlib\\{current toolchain}\lib
 
   Where current toolchain is likely `stable-x86_64-pc-windows-gnu`.
 
@@ -221,6 +221,19 @@ http://www.libsdl.org/ (SDL2-devel-2.0.x-mingw.tar.gz).
     into your cargo project, right next to your Cargo.toml.
 
 5. When you're shipping your game make sure to copy SDL2.dll to the same directory that your compiled exe is in, otherwise the game won't launch.
+
+#### Static linking with MinGW
+
+If you want to use the `static-link` feature with the windows-gnu toolchain, then you will also need the following libraries:
+
+    libimm32.a
+    libversion.a
+    libdinput8.a
+    libdxguid.a
+
+These files are not currently included with the windows-gnu toolchain, but can be downloaded [here](https://sourceforge.net/projects/mingw-w64/files/). For the x86_64 toolchain, you want the `x86_64-win32-seh` package, and for i686 you want the `i686-win32-dwarf` one.
+
+You will find the aforementioned libraries under `mingw64/x86_64-w64-mingw32/lib/` (for x86_64) or `mingw32/i686-w64-mingw32/lib/` (for i686). Copy them to your toolchain's `lib` directory (the same one you copied the SDL .a files to).
 
 ### Windows (MSVC)
 
@@ -238,8 +251,8 @@ http://www.libsdl.org/ (SDL2-devel-2.0.x-mingw.tar.gz).
     or to your library folder of choice, and ensure you have a system environment variable of
     > LIB = C:\your\rust\library\folder
 
-	For Rustup users, this folder will be in
-	> C:\Users\\{Your Username}\\.multirust\toolchains\\{current toolchain}\lib\rustlib\\{current toolchain}\lib
+    For Rustup users, this folder will be in
+    > C:\Users\\{Your Username}\\.rustup\toolchains\\{current toolchain}\lib\rustlib\\{current toolchain}\lib
 
   Where current toolchain is likely `stable-x86_64-pc-windows-msvc`.
 
@@ -250,6 +263,13 @@ http://www.libsdl.org/ (SDL2-devel-2.0.x-mingw.tar.gz).
 
  5. When you're shipping your game make sure to copy SDL2.dll to the same directory that your compiled exe is in, otherwise the game won't launch.
 
+#### Static linking with MSVC
+
+The MSVC development libraries provided by http://libsdl.org/ don't include a static library. This means that if you want to use the `static-link` feature with the windows-msvc toolchain, you have to either
+
+- build an SDL2 static library yourself and copy it to your toolchain's `lib` directory; or
+- also enable the `bundled` feature, which will build a static library for you.
+
 # Installation
 
 If you're using [cargo][crates] to manage your project, you can
@@ -257,7 +277,7 @@ download through Crates.io:
 
 ```toml
     [dependencies]
-    sdl2 = "0.31"
+    sdl2 = "0.32"
 ```
 
 Alternatively, pull it from GitHub to obtain the latest version from master
@@ -278,7 +298,7 @@ adding this instead:
 
 ```toml
     [dependencies.sdl2]
-    version = "0.31"
+    version = "0.32"
     default-features = false
     features = ["ttf","image","gfx","mixer"]
 ```
@@ -459,6 +479,58 @@ fn main() {
 This method is useful when you don't care about sdl2's render capabilities, but you do care about
 its audio, controller and other neat features that sdl2 has.
 
+# Vulkan
+
+To use Vulkan, you need a Vulkan library for Rust. This example uses the
+[Vulkano](https://github.com/vulkano-rs/vulkano) library. Other libraries may use different data
+types for raw Vulkan object handles. The procedure to interface SDL2's Vulkan functions with these
+will be different for each one.
+
+```rust
+extern crate sdl2;
+extern crate vulkano;
+
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
+use std::ffi::CString;
+use vulkano::VulkanObject;
+use vulkano::instance::{Instance, RawInstanceExtensions};
+use vulkano::swapchain::Surface;
+
+fn main() {
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+
+    let window = video_subsystem.window("Window", 800, 600)
+        .vulkan()
+        .build()
+        .unwrap();
+
+    let instance_extensions = window.vulkan_instance_extensions().unwrap();
+    let raw_instance_extensions = RawInstanceExtensions::new(instance_extensions.iter().map(
+        |&v| CString::new(v).unwrap()
+        ));
+    let instance = Instance::new(None, raw_instance_extensions, None).unwrap();
+    let surface_handle = window.vulkan_create_surface(instance.internal_object()).unwrap();
+    let surface = unsafe { Surface::from_raw_surface(instance, surface_handle, window.context()) };
+
+    let mut event_pump = sdl_context.event_pump().unwrap();
+
+    'running: loop {
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                    break 'running
+                },
+                _ => {}
+            }
+        }
+        ::std::thread::sleep(::std::time::Duration::new(0, 1_000_000_000u32 / 60));
+    }
+}
+
+```
+
 # When things go wrong
 Rust, and Rust-SDL2, are both still heavily in development, and you may run
 into teething issues when using this. Before panicking, check that you're using
@@ -477,7 +549,7 @@ Any Pull Request is welcome, however small your contribution may be ! There are,
 [changelog]: ./changelog.md
 [crates-io-badge]: https://img.shields.io/crates/v/sdl2.svg
 [crates-io-url]: https://crates.io/crates/sdl2
-[trav-ci-img]: https://travis-ci.org/Rust-SDL2/rust-sdl2.png?branch=master
+[trav-ci-img]: https://travis-ci.org/Rust-SDL2/rust-sdl2.svg?branch=master
 [trav-ci]: https://travis-ci.org/Rust-SDL2/rust-sdl2
 [early-sdl]: https://github.com/brson/rust-sdl
 [homebrew]: http://brew.sh/

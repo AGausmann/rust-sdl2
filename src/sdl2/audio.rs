@@ -54,20 +54,18 @@
 
 use std::ffi::{CStr, CString};
 use num::FromPrimitive;
-use libc::{c_int, uint8_t, c_char};
-use std::os::raw::c_void;
+use libc::{c_int, c_void, uint8_t, c_char};
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::marker::PhantomData;
 use std::mem;
-use std::mem::transmute;
 use std::ptr;
 
-use AudioSubsystem;
-use get_error;
-use rwops::RWops;
+use crate::AudioSubsystem;
+use crate::get_error;
+use crate::rwops::RWops;
 
-use sys;
+use crate::sys;
 
 impl AudioSubsystem {
     /// Opens a new audio device given the desired parameters and callback.
@@ -209,12 +207,16 @@ pub enum AudioStatus {
 impl FromPrimitive for AudioStatus {
     fn from_i64(n: i64) -> Option<AudioStatus> {
         use self::AudioStatus::*;
-        let n = n as u32;
 
-        Some( match unsafe { transmute::<u32, sys::SDL_AudioStatus>(n) } {
-            sys::SDL_AudioStatus::SDL_AUDIO_STOPPED => Stopped,
-            sys::SDL_AudioStatus::SDL_AUDIO_PLAYING => Playing,
-            sys::SDL_AudioStatus::SDL_AUDIO_PAUSED  => Paused,
+        const STOPPED: i64 = sys::SDL_AudioStatus::SDL_AUDIO_STOPPED as i64;
+        const PLAYING: i64 = sys::SDL_AudioStatus::SDL_AUDIO_PLAYING as i64;
+        const PAUSED: i64 = sys::SDL_AudioStatus::SDL_AUDIO_PAUSED as i64;
+
+        Some(match n {
+            STOPPED => Stopped,
+            PLAYING => Playing,
+            PAUSED  => Paused,
+            _ => return None,
         })
     }
 
@@ -278,7 +280,7 @@ pub struct AudioSpecWAV {
 impl AudioSpecWAV {
     /// Loads a WAVE from the file path.
     pub fn load_wav<P: AsRef<Path>>(path: P) -> Result<AudioSpecWAV, String> {
-        let mut file = try!(RWops::from_file(path, "rb"));
+        let mut file = r#try!(RWops::from_file(path, "rb"));
         AudioSpecWAV::load_wav_rw(&mut file)
     }
 
@@ -327,7 +329,7 @@ where Self::Channel: AudioFormatNum + 'static
 {
     type Channel;
 
-    fn callback(&mut self, &mut [Self::Channel]);
+    fn callback(&mut self, _: &mut [Self::Channel]);
 }
 
 /// A phantom type for retrieving the `SDL_AudioFormat` of a given generic type.
@@ -373,13 +375,15 @@ extern "C" fn audio_callback_marshall<CB: AudioCallback>
     use std::slice::from_raw_parts_mut;
     use std::mem::size_of;
     unsafe {
-        let cb_userdata: &mut CB = &mut *(userdata as *mut CB);
+        let cb_userdata: &mut Option<CB> = &mut *(userdata as *mut _);
         let buf: &mut [CB::Channel] = from_raw_parts_mut(
             stream as *mut CB::Channel,
             len as usize / size_of::<CB::Channel>()
         );
 
-        cb_userdata.callback(buf);
+        if let Some(cb) = cb_userdata {
+            cb.callback(buf);
+        }
     }
 }
 
@@ -394,14 +398,13 @@ pub struct AudioSpecDesired {
 }
 
 impl AudioSpecDesired {
-    fn convert_to_ll<CB, F, C, S>(freq: F, channels: C, samples: S, userdata: *mut CB) -> sys::SDL_AudioSpec
+    fn convert_to_ll<CB, F, C, S>(freq: F, channels: C, samples: S, userdata: *mut Option<CB>) -> sys::SDL_AudioSpec
     where
         CB: AudioCallback,
         F: Into<Option<i32>>,
         C: Into<Option<u8>>,
         S: Into<Option<u16>>,
     {
-        use std::mem::transmute;
 
         let freq = freq.into();
         let channels = channels.into();
@@ -413,22 +416,20 @@ impl AudioSpecDesired {
 
         // A value of 0 means "fallback" or "default".
 
-        unsafe {
-            sys::SDL_AudioSpec {
-                freq: freq.unwrap_or(0),
-                format: <CB::Channel as AudioFormatNum>::audio_format().to_ll(),
-                channels: channels.unwrap_or(0),
-                silence: 0,
-                samples: samples.unwrap_or(0),
-                padding: 0,
-                size: 0,
-                callback: Some(audio_callback_marshall::<CB>
-                        as extern "C" fn
-                            (arg1: *mut c_void,
-                             arg2: *mut uint8_t,
-                             arg3: c_int)),
-                userdata: transmute(userdata)
-            }
+        sys::SDL_AudioSpec {
+            freq: freq.unwrap_or(0),
+            format: <CB::Channel as AudioFormatNum>::audio_format().to_ll(),
+            channels: channels.unwrap_or(0),
+            silence: 0,
+            samples: samples.unwrap_or(0),
+            padding: 0,
+            size: 0,
+            callback: Some(audio_callback_marshall::<CB>
+                    as extern "C" fn
+                        (arg1: *mut c_void,
+                            arg2: *mut uint8_t,
+                            arg3: c_int)),
+            userdata: userdata as *mut _,
         }
     }
 
@@ -596,7 +597,7 @@ pub struct AudioDevice<CB: AudioCallback> {
     device_id: AudioDeviceID,
     spec: AudioSpec,
     /// Store the callback to keep it alive for the entire duration of `AudioDevice`.
-    userdata: Box<CB>
+    userdata: Box<Option<CB>>
 }
 
 impl<CB: AudioCallback> AudioDevice<CB> {
@@ -607,14 +608,8 @@ impl<CB: AudioCallback> AudioDevice<CB> {
         D: Into<Option<&'a str>>,
     {
 
-        // SDL_OpenAudioDevice needs a userdata pointer, but we can't initialize the
-        // callback without the obtained AudioSpec.
-        // Create an uninitialized box that will be initialized after SDL_OpenAudioDevice.
-        let userdata: *mut CB = unsafe {
-            let b: Box<CB> = Box::new(mem::uninitialized());
-            mem::transmute(b)
-        };
-        let desired = AudioSpecDesired::convert_to_ll(spec.freq, spec.channels, spec.samples, userdata);
+        let mut userdata: Box<Option<CB>> = Box::new(None);
+        let desired = AudioSpecDesired::convert_to_ll(spec.freq, spec.channels, spec.samples, &mut *userdata);
 
         let mut obtained = unsafe { mem::uninitialized::<sys::SDL_AudioSpec>() };
         unsafe {
@@ -636,10 +631,8 @@ impl<CB: AudioCallback> AudioDevice<CB> {
                 id => {
                     let device_id = AudioDeviceID::PlaybackDevice(id);
                     let spec = AudioSpec::convert_from_ll(obtained);
-                    let mut userdata: Box<CB> = mem::transmute(userdata);
 
-                    let garbage = mem::replace(&mut userdata as &mut CB, get_callback(spec));
-                    mem::forget(garbage);
+                    *userdata = Some(get_callback(spec));
 
                     Ok(AudioDevice {
                         subsystem: a.clone(),
@@ -713,7 +706,7 @@ impl<CB: AudioCallback> AudioDevice<CB> {
     /// but the callback data will be dropped.
     pub fn close_and_get_callback(self) -> CB {
         drop(self.device_id);
-        *self.userdata
+        self.userdata.expect("Missing callback")
     }
 }
 
@@ -725,11 +718,11 @@ pub struct AudioDeviceLockGuard<'a, CB> where CB: AudioCallback, CB: 'a {
 
 impl<'a, CB: AudioCallback> Deref for AudioDeviceLockGuard<'a, CB> {
     type Target = CB;
-    fn deref(&self) -> &CB { &self.device.userdata }
+    fn deref(&self) -> &CB { (*self.device.userdata).as_ref().expect("Missing callback") }
 }
 
 impl<'a, CB: AudioCallback> DerefMut for AudioDeviceLockGuard<'a, CB> {
-    fn deref_mut(&mut self) -> &mut CB { &mut self.device.userdata }
+    fn deref_mut(&mut self) -> &mut CB { (*self.device.userdata).as_mut().expect("Missing callback") }
 }
 
 impl<'a, CB: AudioCallback> Drop for AudioDeviceLockGuard<'a, CB> {
@@ -829,13 +822,13 @@ mod test {
         assert!(cvt.is_conversion_needed());
 
         // since we're going from mono to stereo, our capacity must be at least twice the original (255) vec size
-        assert!(cvt.capacity(255) > 255*2, "capacity must be able to hold the converted audio sample");
+        assert!(cvt.capacity(255) >= 255*2, "capacity must be able to hold the converted audio sample");
 
         let new_buffer = cvt.convert(buffer);
         assert_eq!(new_buffer.len(), new_buffer_expected.len(), "capacity must be exactly equal to twice the original vec size");
 
         // // this has been commented, see https://discourse.libsdl.org/t/change-of-behavior-in-audiocvt-sdl-convertaudio-from-2-0-5-to-2-0-6/24682
-        // // to maybe re-enable it someday 
+        // // to maybe re-enable it someday
         // assert_eq!(new_buffer, new_buffer_expected);
     }
 }

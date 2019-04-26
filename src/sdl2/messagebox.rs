@@ -4,29 +4,29 @@ use std::fmt;
 use std::ptr;
 use std::os::raw::{c_char,c_int};
 
-use video::Window;
-use get_error;
+use crate::video::Window;
+use crate::get_error;
 
-use sys;
+use crate::sys;
 
 bitflags! {
-    pub flags MessageBoxFlag: u32 {
-        const MESSAGEBOX_ERROR =
-            sys::SDL_MessageBoxFlags::SDL_MESSAGEBOX_ERROR as u32,
-        const MESSAGEBOX_WARNING =
-            sys::SDL_MessageBoxFlags::SDL_MESSAGEBOX_WARNING as u32,
-        const MESSAGEBOX_INFORMATION =
-            sys::SDL_MessageBoxFlags::SDL_MESSAGEBOX_INFORMATION as u32
+    pub struct MessageBoxFlag: u32 {
+        const ERROR =
+            sys::SDL_MessageBoxFlags::SDL_MESSAGEBOX_ERROR as u32;
+        const WARNING =
+            sys::SDL_MessageBoxFlags::SDL_MESSAGEBOX_WARNING as u32;
+        const INFORMATION =
+            sys::SDL_MessageBoxFlags::SDL_MESSAGEBOX_INFORMATION as u32;
     }
 }
 
 bitflags! {
-    pub flags MessageBoxButtonFlag: u32 {
-        const MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT =
-            sys::SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT as u32,
-        const MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT =
-            sys::SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT as u32,
-        const MESSAGEBOX_BUTTON_NOTHING = 0
+    pub struct MessageBoxButtonFlag: u32 {
+        const ESCAPEKEY_DEFAULT =
+            sys::SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT as u32;
+        const RETURNKEY_DEFAULT =
+            sys::SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT as u32;
+        const NOTHING = 0;
     }
 }
 

@@ -1,22 +1,24 @@
-use libc::{c_int, c_float, uint32_t, c_char};
+use libc::{c_int, c_uint, c_float, uint32_t, c_char};
 use std::ffi::{CStr, CString, NulError};
 use std::{mem, ptr, fmt};
 use std::rc::Rc;
 use std::error::Error;
 use std::ops::{Deref, DerefMut};
 
-use rect::Rect;
-use render::CanvasBuilder;
-use surface::SurfaceRef;
-use pixels::PixelFormatEnum;
-use VideoSubsystem;
-use EventPump;
+use crate::rect::Rect;
+use crate::render::CanvasBuilder;
+use crate::surface::SurfaceRef;
+use crate::pixels::PixelFormatEnum;
+use crate::VideoSubsystem;
+use crate::EventPump;
 use num::FromPrimitive;
-use common::{validate_int, IntegerOrSdlError};
+use crate::common::{validate_int, IntegerOrSdlError};
 
-use get_error;
+use crate::get_error;
 
-use sys;
+use crate::sys;
+
+pub use crate::sys::{VkInstance, VkSurfaceKHR};
 
 
 pub struct WindowSurfaceRef<'a>(&'a mut SurfaceRef, &'a Window);
@@ -180,17 +182,17 @@ macro_rules! attrs {
 /// assert_eq!(gl_attr.context_version(), (3, 2));
 /// ```
 pub mod gl_attr {
-    use sys;
-    use get_error;
+    use crate::sys;
+    use crate::get_error;
     use std::marker::PhantomData;
     use super::{GLProfile, GLAttrTypeUtil};
 
     /// OpenGL context getters and setters. Obtain with `VideoSubsystem::gl_attr()`.
     pub struct GLAttr<'a> {
-        _marker: PhantomData<&'a ::VideoSubsystem>
+        _marker: PhantomData<&'a crate::VideoSubsystem>
     }
 
-    impl ::VideoSubsystem {
+    impl crate::VideoSubsystem {
         /// Obtains access to the OpenGL window attributes.
         pub fn gl_attr(&self) -> GLAttr {
             GLAttr {
@@ -313,7 +315,7 @@ pub mod gl_attr {
     /// The type that allows you to build a OpenGL context configuration.
     pub struct ContextFlagsBuilder<'a> {
         flags: i32,
-        _marker: PhantomData<&'a ::VideoSubsystem>
+        _marker: PhantomData<&'a crate::VideoSubsystem>
     }
 
     impl<'a> ContextFlagsBuilder<'a> {
@@ -807,6 +809,61 @@ impl VideoSubsystem {
             mem::transmute(interval)
         }
     }
+
+    /// Loads the default Vulkan library.
+    ///
+    /// This should be done after initializing the video driver, but before creating any Vulkan windows.
+    /// If no Vulkan library is loaded, the default library will be loaded upon creation of the first Vulkan window.
+    ///
+    /// If a different library is already loaded, this function will return an error.
+    pub fn vulkan_load_library_default(&self) -> Result<(), String> {
+        unsafe {
+            if sys::SDL_Vulkan_LoadLibrary(ptr::null()) == 0 {
+                Ok(())
+            } else {
+                Err(get_error())
+            }
+        }
+    }
+
+    /// Loads the Vulkan library using a platform-dependent Vulkan library name (usually a file path).
+    ///
+    /// This should be done after initializing the video driver, but before creating any Vulkan windows.
+    /// If no Vulkan library is loaded, the default library will be loaded upon creation of the first Vulkan window.
+    ///
+    /// If a different library is already loaded, this function will return an error.
+    pub fn vulkan_load_library<P: AsRef<::std::path::Path>>(&self, path: P) -> Result<(), String> {
+        unsafe {
+            // TODO: use OsStr::to_cstring() once it's stable
+            let path = CString::new(path.as_ref().to_str().unwrap()).unwrap();
+            if sys::SDL_Vulkan_LoadLibrary(path.as_ptr() as *const c_char) == 0 {
+                Ok(())
+            } else {
+                Err(get_error())
+            }
+        }
+    }
+
+    /// Unloads the current Vulkan library.
+    ///
+    /// To completely unload the library, this should be called for every successful load of the
+    /// Vulkan library.
+    pub fn vulkan_unload_library(&self) {
+        unsafe { sys::SDL_Vulkan_UnloadLibrary(); }
+    }
+
+    /// Gets the pointer to the
+    /// [`vkGetInstanceProcAddr`](https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkGetInstanceProcAddr.html)
+    /// Vulkan function. This function can be called to retrieve the address of other Vulkan
+    /// functions.
+    pub fn vulkan_get_proc_address_function(&self) -> Result<*const (), String> {
+        let result = unsafe { sys::SDL_Vulkan_GetVkGetInstanceProcAddr() as *const () };
+        if result.is_null() {
+            Err(get_error())
+        } else {
+            Ok(result)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1070,6 +1127,33 @@ impl Window {
         unsafe { sys::SDL_GL_SwapWindow(self.context.raw) }
     }
 
+    /// Get the names of the Vulkan instance extensions needed to create a surface with `vulkan_create_surface`.
+    pub fn vulkan_instance_extensions(&self) -> Result<Vec<&'static str>, String> {
+        let mut count: c_uint = 0;
+        if unsafe { sys::SDL_Vulkan_GetInstanceExtensions(self.context.raw, &mut count, ptr::null_mut()) } == sys::SDL_bool::SDL_FALSE {
+            return Err(get_error());
+        }
+        let mut names: Vec<*const c_char> = vec![ptr::null(); count as usize];
+        if unsafe { sys::SDL_Vulkan_GetInstanceExtensions(self.context.raw, &mut count, names.as_mut_ptr()) } == sys::SDL_bool::SDL_FALSE {
+            return Err(get_error());
+        }
+        Ok(names.iter().map(|&val| unsafe { CStr::from_ptr(val) }.to_str().unwrap()).collect())
+    }
+
+    /// Create a Vulkan rendering surface for a window.
+    ///
+    /// The `VkInstance` must be created using a prior call to the
+    /// [`vkCreateInstance`](https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCreateInstance.html)
+    /// function in the Vulkan library.
+    pub fn vulkan_create_surface(&self, instance: VkInstance) -> Result<VkSurfaceKHR, String> {
+        let mut surface: VkSurfaceKHR = 0;
+        if unsafe { sys::SDL_Vulkan_CreateSurface(self.context.raw, instance, &mut surface) } == sys::SDL_bool::SDL_FALSE {
+            Err(get_error())
+        } else {
+            Ok(surface)
+        }
+    }
+
     pub fn display_index(&self) -> Result<i32, String> {
         let result = unsafe { sys::SDL_GetWindowDisplayIndex(self.context.raw) };
         if result < 0 {
@@ -1126,7 +1210,7 @@ impl Window {
     }
 
     pub fn set_title(&mut self, title: &str) -> Result<(), NulError> {
-        let title = try!(CString::new(title));
+        let title = r#try!(CString::new(title));
         Ok(unsafe {
             sys::SDL_SetWindowTitle(self.context.raw, title.as_ptr() as *const c_char);
         })
@@ -1184,8 +1268,8 @@ impl Window {
 
     pub fn set_size(&mut self, width: u32, height: u32)
             -> Result<(), IntegerOrSdlError> {
-        let w = try!(validate_int(width, "width"));
-        let h = try!(validate_int(height, "height"));
+        let w = r#try!(validate_int(width, "width"));
+        let h = r#try!(validate_int(height, "height"));
         Ok(unsafe {
             sys::SDL_SetWindowSize(self.context.raw, w, h)
         })
@@ -1205,10 +1289,17 @@ impl Window {
         (w as u32, h as u32)
     }
 
+    pub fn vulkan_drawable_size(&self) -> (u32, u32) {
+        let mut w: c_int = 0;
+        let mut h: c_int = 0;
+        unsafe { sys::SDL_Vulkan_GetDrawableSize(self.context.raw, &mut w, &mut h) };
+        (w as u32, h as u32)
+    }
+
     pub fn set_minimum_size(&mut self, width: u32, height: u32)
             -> Result<(), IntegerOrSdlError> {
-        let w = try!(validate_int(width, "width"));
-        let h = try!(validate_int(height, "height"));
+        let w = r#try!(validate_int(width, "width"));
+        let h = r#try!(validate_int(height, "height"));
         Ok(unsafe {
             sys::SDL_SetWindowMinimumSize(self.context.raw, w, h)
         })
@@ -1223,8 +1314,8 @@ impl Window {
 
     pub fn set_maximum_size(&mut self, width: u32, height: u32)
             -> Result<(), IntegerOrSdlError> {
-        let w = try!(validate_int(width, "width"));
-        let h = try!(validate_int(height, "height"));
+        let w = r#try!(validate_int(width, "width"));
+        let h = r#try!(validate_int(height, "height"));
         Ok(unsafe {
             sys::SDL_SetWindowMaximumSize(self.context.raw, w, h)
         })
@@ -1379,6 +1470,34 @@ impl Window {
             Ok((red, green, blue))
         } else {
             Err(get_error())
+        }
+    }
+
+    /// Set the transparency of the window. The given value will be clamped internally between
+    /// `0.0` (fully transparent), and `1.0` (fully opaque).
+    ///
+    /// This method returns an error if opacity isn't supported by the current platform.
+    pub fn set_opacity(&mut self, opacity: f32) -> Result<(), String> {
+        let result = unsafe { sys::SDL_SetWindowOpacity(self.context.raw, opacity) };
+        if result < 0 {
+            Err(get_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Returns the transparency of the window, as a value between `0.0` (fully transparent), and
+    /// `1.0` (fully opaque).
+    ///
+    /// If opacity isn't supported by the current platform, this method returns `Ok(1.0)` instead
+    /// of an error.
+    pub fn opacity(&self) -> Result<f32, String> {
+        let mut opacity = 0.0;
+        let result = unsafe { sys::SDL_GetWindowOpacity(self.context.raw, &mut opacity) };
+        if result < 0 {
+            Err(get_error())
+        } else {
+            Ok(opacity)
         }
     }
 }

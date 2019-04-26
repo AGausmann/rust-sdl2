@@ -2,21 +2,23 @@ use libc::c_char;
 use std::error;
 use std::ffi::{CString, CStr, NulError};
 use std::fmt;
+use std::io;
 use std::path::Path;
-use rwops::RWops;
+use crate::rwops::RWops;
 
-use GameControllerSubsystem;
-use get_error;
-use joystick;
-use common::{validate_int, IntegerOrSdlError};
+use crate::GameControllerSubsystem;
+use crate::get_error;
+use crate::joystick;
+use crate::common::{validate_int, IntegerOrSdlError};
 use std::mem::transmute;
 
-use sys;
+use crate::sys;
 
 #[derive(Debug)]
 pub enum AddMappingError {
     InvalidMapping(NulError),
     InvalidFilePath(String),
+    ReadError(String),
     SdlError(String),
 }
 
@@ -27,7 +29,8 @@ impl fmt::Display for AddMappingError {
         match *self {
             InvalidMapping(ref e) => write!(f, "Null error: {}", e),
             InvalidFilePath(ref value) => write!(f, "Invalid file path ({})", value),
-            SdlError(ref e) => write!(f, "SDL error: {}", e)
+            ReadError(ref e) => write!(f, "Read error: {}", e),
+            SdlError(ref e) => write!(f, "SDL error: {}", e),
         }
     }
 }
@@ -39,6 +42,7 @@ impl error::Error for AddMappingError {
         match *self {
             InvalidMapping(_) => "invalid mapping",
             InvalidFilePath(_) => "invalid file path",
+            ReadError(_) => "read error",
             SdlError(ref e) => e,
         }
     }
@@ -69,8 +73,8 @@ impl GameControllerSubsystem {
     /// Controller IDs are the same as joystick IDs and the maximum number can
     /// be retrieved using the `SDL_NumJoysticks` function.
     pub fn open(&self, joystick_index: u32) -> Result<GameController, IntegerOrSdlError> {
-        use common::IntegerOrSdlError::*;
-        let joystick_index = try!(validate_int(joystick_index, "joystick_index"));
+        use crate::common::IntegerOrSdlError::*;
+        let joystick_index = r#try!(validate_int(joystick_index, "joystick_index"));
         let controller = unsafe { sys::SDL_GameControllerOpen(joystick_index) };
 
         if controller.is_null() {
@@ -85,8 +89,8 @@ impl GameControllerSubsystem {
 
     /// Return the name of the controller at index `joystick_index`.
     pub fn name_for_index(&self, joystick_index: u32) -> Result<String, IntegerOrSdlError> {
-        use common::IntegerOrSdlError::*;
-        let joystick_index = try!(validate_int(joystick_index, "joystick_index"));
+        use crate::common::IntegerOrSdlError::*;
+        let joystick_index = r#try!(validate_int(joystick_index, "joystick_index"));
         let c_str = unsafe { sys::SDL_GameControllerNameForIndex(joystick_index) };
 
         if c_str.is_null() {
@@ -110,7 +114,7 @@ impl GameControllerSubsystem {
                  == sys::SDL_ENABLE as i32 }
     }
 
-    /// Add a new mapping from a mapping string
+    /// Add a new controller input mapping from a mapping string.
     pub fn add_mapping(&self, mapping: &str)
             -> Result<MappingStatus, AddMappingError> {
         use self::AddMappingError::*;
@@ -128,24 +132,36 @@ impl GameControllerSubsystem {
         }
     }
 
-    /// Load mappings from a file
-    pub fn load_mappings<P: AsRef<Path>>(&self, path: P)
-            -> Result<i32, AddMappingError> {
+    /// Load controller input mappings from a file.
+    pub fn load_mappings<P: AsRef<Path>>(&self, path: P) -> Result<i32, AddMappingError> {
         use self::AddMappingError::*;
 
-        let file = match RWops::from_file(path, "r") {
-            Ok(f) => f,
-            Err(s) => return Err(InvalidFilePath(s))
-        };
-
-        let result = unsafe { sys::SDL_GameControllerAddMappingsFromRW(file.raw(), 0) };
-
-        match result {
-            -1 => Err(SdlError(get_error())),
-            _ => Ok(result)
-        }
+        let rw = RWops::from_file(path, "r").map_err(InvalidFilePath)?;
+        self.load_mappings_from_rw(rw)
     }
 
+    /// Load controller input mappings from a [`Read`](std::io::Read) object.
+    pub fn load_mappings_from_read<R: io::Read>(
+        &self,
+        read: &mut R,
+    ) -> Result<i32, AddMappingError> {
+        use self::AddMappingError::*;
+
+        let mut buffer = Vec::with_capacity(1024);
+        let rw = RWops::from_read(read, &mut buffer).map_err(ReadError)?;
+        self.load_mappings_from_rw(rw)
+    }
+
+    /// Load controller input mappings from an SDL [`RWops`] object.
+    pub fn load_mappings_from_rw<'a>(&self, rw: RWops<'a>) -> Result<i32, AddMappingError> {
+        use self::AddMappingError::*;
+
+        let result = unsafe { sys::SDL_GameControllerAddMappingsFromRW(rw.raw(), 0) };
+        match result {
+            -1 => Err(SdlError(get_error())),
+            _ => Ok(result),
+        }
+    }
 
     pub fn mapping_for_guid(&self, guid: joystick::Guid) -> Result<String, String> {
         let c_str = unsafe { sys::SDL_GameControllerMappingForGUID(guid.raw()) };
@@ -385,6 +401,37 @@ impl GameController {
         unsafe { raw_button = transmute(button); }
 
         unsafe { sys::SDL_GameControllerGetButton(self.raw, raw_button) != 0 }
+    }
+
+    /// Set the rumble motors to their specified intensities, if supported.
+    /// Automatically resets back to zero after `duration_ms` milliseconds have passed.
+    ///
+    /// # Notes
+    ///
+    /// The value range for the intensities is 0 to 0xFFFF.
+    ///
+    /// Do *not* use `std::u32::MAX` or similar for `duration_ms` if you want
+    /// the rumble effect to keep playing for a long time, as this results in
+    /// the effect ending immediately after starting due to an overflow.
+    /// Use some smaller, "huge enough" number instead.
+    pub fn set_rumble(&mut self,
+                      low_frequency_rumble: u16,
+                      high_frequency_rumble: u16,
+                      duration_ms: u32)
+                      -> Result<(), IntegerOrSdlError>
+    {
+        let result = unsafe {
+            sys::SDL_GameControllerRumble(self.raw,
+                                          low_frequency_rumble,
+                                          high_frequency_rumble,
+                                          duration_ms)
+        };
+
+        if result != 0 {
+            Err(IntegerOrSdlError::SdlError(get_error()))
+        } else {
+            Ok(())
+        }
     }
 }
 

@@ -1,12 +1,13 @@
 extern crate rand;
+use self::rand::Rng;
+use self::rand::distributions::{Distribution, Standard};
 
-use num::FromPrimitive;
-
-use sys;
 use libc::uint32_t;
+use num::FromPrimitive;
 use std::mem::transmute;
+use crate::sys;
 
-use get_error;
+use crate::get_error;
 
 pub struct Palette {
     raw: *mut sys::SDL_Palette
@@ -16,7 +17,7 @@ impl Palette {
     #[inline]
     /// Creates a new, uninitialized palette
     pub fn new(mut capacity: usize) -> Result<Self, String> {
-        use common::*;
+        use crate::common::*;
 
         let ncolors = {
             // This is kind of a hack. We have to cast twice because
@@ -44,7 +45,7 @@ impl Palette {
 
     /// Creates a palette from the provided colors
     pub fn with_colors(colors: &[Color]) -> Result<Self, String> {
-        let pal = try!(Self::new(colors.len()));
+        let pal = r#try!(Self::new(colors.len()));
 
         // Already validated, so don't check again
         let ncolors = colors.len() as ::libc::c_int;
@@ -170,10 +171,13 @@ impl From<(u8, u8, u8, u8)> for Color {
     }
 }
 
-impl rand::Rand for Color {
-    fn rand<R: rand::Rng>(rng: &mut R) -> Color {
-        if rng.gen() { Color::RGBA(rng.gen(), rng.gen(), rng.gen(), rng.gen()) }
-        else { Color::RGB(rng.gen(), rng.gen(), rng.gen()) }
+impl Distribution<Color> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Color {
+        if rng.gen() {
+            Color::RGBA(rng.gen(), rng.gen(), rng.gen(), rng.gen())
+        } else {
+            Color::RGB(rng.gen(), rng.gen(), rng.gen())
+        }
     }
 }
 
@@ -236,6 +240,23 @@ pub enum PixelFormatEnum {
     YUY2 = sys::SDL_PIXELFORMAT_YUY2 as i32,
     UYVY = sys::SDL_PIXELFORMAT_UYVY as i32,
     YVYU = sys::SDL_PIXELFORMAT_YVYU as i32
+}
+
+// Endianness-agnostic aliases for 32-bit formats
+#[cfg(target_endian = "big")]
+impl PixelFormatEnum {
+    pub const RGBA32: PixelFormatEnum = PixelFormatEnum::RGBA8888;
+    pub const ARGB32: PixelFormatEnum = PixelFormatEnum::ARGB8888;
+    pub const BGRA32: PixelFormatEnum = PixelFormatEnum::BGRA8888;
+    pub const ABGR32: PixelFormatEnum = PixelFormatEnum::ABGR8888;
+}
+
+#[cfg(target_endian = "little")]
+impl PixelFormatEnum {
+    pub const RGBA32: PixelFormatEnum = PixelFormatEnum::ABGR8888;
+    pub const ARGB32: PixelFormatEnum = PixelFormatEnum::BGRA8888;
+    pub const BGRA32: PixelFormatEnum = PixelFormatEnum::ARGB8888;
+    pub const ABGR32: PixelFormatEnum = PixelFormatEnum::RGBA8888;
 }
 
 impl PixelFormatEnum {
@@ -361,7 +382,7 @@ impl PixelFormatEnum {
     }
 
     pub fn supports_alpha(&self) -> bool {
-        use ::pixels::PixelFormatEnum::*;
+        use crate::pixels::PixelFormatEnum::*;
         match *self {
             ARGB4444 | ARGB1555 | ARGB8888 | ARGB2101010 |
             ABGR4444 | ABGR1555 | ABGR8888 |
@@ -471,7 +492,7 @@ fn test_pixel_format_enum() {
     ];
 
 
-    let _sdl_context = ::sdl::init().unwrap();
+    let _sdl_context = crate::sdl::init().unwrap();
     for format in pixel_formats {
         // If we don't support making a surface of a specific format,
         // that's fine, just keep going the best we can.
