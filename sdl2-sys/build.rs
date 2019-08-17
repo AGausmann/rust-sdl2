@@ -454,22 +454,29 @@ fn main() {
     let host = env::var("HOST").expect("Cargo build scripts always have HOST");
     let target_os = get_os_from_triple(target.as_str()).unwrap();
 
-    let sdl2_compiled_path: PathBuf;
-    #[cfg(feature = "bundled")] {
-        let sdl2_source_path = download_sdl2();
-        patch_sdl2(sdl2_source_path.as_path());
-        sdl2_compiled_path = compile_sdl2(sdl2_source_path.as_path(), target_os);
+    if target_os != "emscripten" {
+        #[cfg(feature = "bundled")] {
+            let sdl2_source_path = download_sdl2();
+            patch_sdl2(sdl2_source_path.as_path());
+            let sdl2_compiled_path: PathBuf = compile_sdl2(sdl2_source_path.as_path(), target_os);
 
-        let sdl2_downloaded_include_path = sdl2_source_path.join("include");
-        let sdl2_compiled_lib_path = sdl2_compiled_path.join("lib");
+            let sdl2_downloaded_include_path = sdl2_source_path.join("include");
+            let sdl2_compiled_lib_path = sdl2_compiled_path.join("lib");
 
-        println!("cargo:rustc-link-search={}", sdl2_compiled_lib_path.display());
-        
-        #[cfg(feature = "bindgen")] {
-            let include_paths = vec!(String::from(sdl2_downloaded_include_path.to_str().unwrap()));
-            generate_bindings(target.as_str(), host.as_str(), include_paths.as_slice())
+            println!("cargo:rustc-link-search={}", sdl2_compiled_lib_path.display());
+            
+            #[cfg(feature = "bindgen")] {
+                let include_paths = vec!(String::from(sdl2_downloaded_include_path.to_str().unwrap()));
+                generate_bindings(target.as_str(), host.as_str(), include_paths.as_slice())
+            }
+
+            #[cfg(not(feature = "static-link"))] {
+                copy_dynamic_libraries(&sdl2_compiled_path, target_os);
+            }
         }
-    };
+
+        link_sdl2(target_os);
+    }
 
     #[cfg(all(not(feature = "bundled"), feature = "bindgen"))] {
         let include_paths: Vec<String> = compute_include_paths();
@@ -480,11 +487,6 @@ fn main() {
         copy_pregenerated_bindings();
     }
 
-    link_sdl2(target_os);
-
-    #[cfg(all(feature = "bundled", not(feature = "static-link")))] {
-        copy_dynamic_libraries(&sdl2_compiled_path, target_os);
-    }
 }
 
 #[cfg(not(feature = "bindgen"))]
